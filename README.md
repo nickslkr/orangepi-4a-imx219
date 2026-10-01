@@ -331,11 +331,30 @@ Public Git identity:
 
 ## License
 
-Individual kernel patches follow the licensing terms of the Linux kernel
-and the files they modify.
+Original project material authored for this repository is licensed under the
+MIT License. This includes the original material in:
 
-Files derived from or intended for integration with existing upstream
-projects retain their applicable upstream licensing terms.
+- `userspace/`
+- `docs/`
+- `results/`
+- `references/`
+- `systemd/`
+- `config/`
+- this `README.md`
 
-Repository-specific userspace and documentation licensing should be checked
-per file before redistribution.
+The MIT License text is available at:
+
+    LICENSES/MIT.txt
+
+This MIT license does not override the licensing terms of third-party or
+upstream-derived material.
+
+Linux kernel patches and kernel-derived files under `kernel/` remain subject
+to the applicable licensing terms of the Linux kernel and of the upstream
+files they modify or derive from.
+
+The FFmpeg patch under `ffmpeg/` remains subject to the applicable licensing
+terms of the corresponding upstream FFmpeg code.
+
+SPDX identifiers and upstream copyright/license notices present in individual
+files take precedence for those files.
