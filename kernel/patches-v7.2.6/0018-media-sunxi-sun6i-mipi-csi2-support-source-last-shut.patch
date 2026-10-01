@@ -1,0 +1,67 @@
+From aa3229ce8cb9d6d2555993a1dd6aea06d884bfd9 Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 15:48:07 +0300
+Subject: [PATCH 18/22] media: sunxi: sun6i-mipi-csi2: support source-last
+ shutdown
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+
+---
+ .../sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c        | 14 ++++++++++----
+ .../sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h        |  1 +
+ 2 files changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c
+index be8779e00..5044c11f6 100644
+--- a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c
++++ b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c
+@@ -192,7 +192,9 @@ static int sun6i_mipi_csi2_s_stream(struct v4l2_subdev *subdev, int on)
+ 		return -ENODEV;
+ 
+ 	if (!on) {
+-		v4l2_subdev_call(source_subdev, video, s_stream, 0);
++		if (!csi2_dev->variant->source_stream_last)
++			v4l2_subdev_call(source_subdev, video, s_stream, 0);
++
+ 		ret = 0;
+ 		goto disable;
+ 	}
+@@ -291,6 +293,9 @@ static int sun6i_mipi_csi2_s_stream(struct v4l2_subdev *subdev, int on)
+ 	phy_power_off(dphy);
+ 	csi2_dev->variant->disable(csi2_dev);
+ 
++	if (!on && csi2_dev->variant->source_stream_last)
++		v4l2_subdev_call(source_subdev, video, s_stream, 0);
++
+ error_pm:
+ 	pm_runtime_put(dev);
+ 
+@@ -935,9 +940,10 @@ static const struct sun6i_mipi_csi2_variant sun6i_a31_mipi_csi2_variant = {
+ };
+ 
+ static const struct sun6i_mipi_csi2_variant sun55i_a523_mipi_csi2_variant = {
+-	.configure      = sun55i_a523_mipi_csi2_configure,
+-	.enable         = sun55i_a523_mipi_csi2_enable,
+-	.disable        = sun55i_a523_mipi_csi2_disable,
++	.configure		= sun55i_a523_mipi_csi2_configure,
++	.enable			= sun55i_a523_mipi_csi2_enable,
++	.disable		= sun55i_a523_mipi_csi2_disable,
++	.source_stream_last	= true,
+ };
+ 
+ static const struct of_device_id sun6i_mipi_csi2_of_match[] = {
+diff --git a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h
+index a40c03fee..7c24def84 100644
+--- a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h
++++ b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h
+@@ -31,6 +31,7 @@ struct sun6i_mipi_csi2_variant {
+ 	bool    has_bus_clock;
+ 	bool    has_mod_clock;
+ 	bool    has_reset;
++	bool    source_stream_last;
+ };
+ 
+ struct sun6i_mipi_csi2_format {
+-- 
+2.47.3
+

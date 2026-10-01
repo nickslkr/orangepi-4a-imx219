@@ -1,0 +1,45 @@
+From 385dfe50f1ee614af7ae1283cb4bc7992f727884 Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 22:27:08 +0300
+Subject: [PATCH 13/22] arm64: dts: allwinner: orangepi-4a: enable MIPI2 CSI-2
+
+Enable the MIPI2 CSI-2 receiver and its D-PHY on the Orange Pi 4A.
+
+Select the PK12-PK17 two-lane MIPI pinctrl state on D-PHY2.
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+---
+ .../boot/dts/allwinner/sun55i-t527-orangepi-4a.dts     | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts b/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts
+index 908227ff2..aa74ce1a8 100644
+--- a/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts
++++ b/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts
+@@ -114,6 +114,12 @@ &gmac1 {
+ 	status = "okay";
+ };
+ 
++&dphy2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&mipi2_2lane_pins>;
++	status = "okay";
++};
++
+ &gpu {
+ 	mali-supply = <&reg_dcdc2>;
+ 	status = "okay";
+@@ -126,6 +132,10 @@ &i2c0 {
+ 	status = "okay";
+ };
+ 
++&mipi2 {
++	status = "okay";
++};
++
+ &mdio1 {
+ 	ext_rgmii_phy: ethernet-phy@1 {
+ 		compatible = "ethernet-phy-ieee802.3-c22";
+-- 
+2.47.3
+

@@ -1,0 +1,14 @@
+[Unit]
+Description=IMX219 uStreamer
+Requires=imx219-producer@%i.service
+After=imx219-producer@%i.service
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/bin/ustreamer -d /dev/video10 -r 1920x1080 -m YUV420 --host=0.0.0.0 --port=8081
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

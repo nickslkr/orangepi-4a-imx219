@@ -1,0 +1,61 @@
+From cd7d035b1394a8aa882b60ac3ee1d74cfc558972 Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 23:00:28 +0300
+Subject: [PATCH 14/22] arm64: dts: allwinner: orangepi-4a: add IMX219 camera
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+
+---
+ .../dts/allwinner/sun55i-t527-orangepi-4a.dts | 30 +++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts b/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts
+index aa74ce1a8..81eb6e968 100644
+--- a/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts
++++ b/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts
+@@ -130,12 +130,42 @@ &i2c0 {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&i2c0_ph_pins>;
+ 	status = "okay";
++
++	imx219: camera@10 {
++		compatible = "sony,imx219";
++		reg = <0x10>;
++
++		clocks = <&ccu CLK_CSI_MCLK2>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&csi_mclk2_pin>;
++
++		VANA-supply = <&reg_cldo2>;
++		VDIG-supply = <&reg_cldo2>;
++		VDDL-supply = <&reg_cldo2>;
++
++		reset-gpios = <&pio 7 2 GPIO_ACTIVE_HIGH>; /* PH2 */
++
++		port {
++			imx219_out: endpoint {
++				remote-endpoint = <&mipi2_in_imx219>;
++				data-lanes = <1 2>;
++				link-frequencies = /bits/ 64 <456000000>;
++			};
++		};
++	};
+ };
+ 
+ &mipi2 {
+ 	status = "okay";
+ };
+ 
++&mipi2_in {
++	mipi2_in_imx219: endpoint {
++		remote-endpoint = <&imx219_out>;
++		data-lanes = <1 2>;
++	};
++};
++
+ &mdio1 {
+ 	ext_rgmii_phy: ethernet-phy@1 {
+ 		compatible = "ethernet-phy-ieee802.3-c22";
+-- 
+2.47.3
+

@@ -1,0 +1,29 @@
+# Build artifacts
+*.o
+*.ko
+*.so
+*.a
+*.cmd
+*.dtb
+*.dtbo
+vmlinux
+Image
+
+# Runtime captures
+*.jpg
+*.jpeg
+*.raw
+*.yuv
+*.log
+
+# Local build directories
+build/
+out/
+tmp/
+
+# Local editor files
+.vscode/
+.idea/
+
+# Local binaries
+imx219_ocl_producer

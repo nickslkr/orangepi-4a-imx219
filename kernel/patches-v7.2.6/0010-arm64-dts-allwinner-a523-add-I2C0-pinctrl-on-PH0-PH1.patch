@@ -1,0 +1,38 @@
+From 82bd0738178310fb6af963cde4ccb507014a5c16 Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 21:35:02 +0300
+Subject: [PATCH 10/22] arm64: dts: allwinner: a523: add I2C0 pinctrl on
+ PH0/PH1
+
+Add the PH0/PH1 pinctrl group for the A523 I2C0 controller.
+
+The Orange Pi 4A vendor configuration routes TWI0 through PH0 and PH1 using mux 2, 40 mA drive strength and pull-ups. This bus is used by the IMX219 camera control interface.
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+---
+ arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+index e286e17f8..c06f4ecd0 100644
+--- a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
++++ b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+@@ -147,6 +147,15 @@ pio: pinctrl@2000000 {
+ 			interrupt-controller;
+ 			#interrupt-cells = <3>;
+ 
++			/omit-if-no-ref/
++			i2c0_ph_pins: i2c0-ph-pins {
++				pins = "PH0", "PH1";
++				function = "twi0";
++				allwinner,pinmux = <2>;
++				drive-strength = <40>;
++				bias-pull-up;
++			};
++
+ 			/omit-if-no-ref/
+ 			i2s2_pi_pins: i2s2-pi-pins {
+ 				pins = "PI2", "PI3", "PI4", "PI5";
+-- 
+2.47.3
+

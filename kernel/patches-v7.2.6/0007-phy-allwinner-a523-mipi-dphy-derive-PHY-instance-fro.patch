@@ -1,0 +1,91 @@
+From 122cfd8936329f88c0c15d611e5b1415d756b24f Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 20:51:50 +0300
+Subject: [PATCH 07/22] phy: allwinner: a523-mipi-dphy: derive PHY instance
+ from MMIO base
+
+Derive the A523 combo PHY instance number from the register base instead of assuming the receiver is always PHY C.
+
+The vendor initialization programs clock-lane deskew to 0x2 for PHY0 and 0x7 for PHY1 through PHY3. Use the derived instance number to preserve that behaviour for all four PHY blocks.
+
+Reject register addresses outside the known A523 combo PHY range or not aligned to the 0x100-byte instance stride.
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+---
+ .../phy/allwinner/phy-sun55i-a523-mipi-dphy.c | 29 +++++++++++++++++--
+ 1 file changed, 26 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/phy/allwinner/phy-sun55i-a523-mipi-dphy.c b/drivers/phy/allwinner/phy-sun55i-a523-mipi-dphy.c
+index ecad6d707..cf352a5f5 100644
+--- a/drivers/phy/allwinner/phy-sun55i-a523-mipi-dphy.c
++++ b/drivers/phy/allwinner/phy-sun55i-a523-mipi-dphy.c
+@@ -56,6 +56,10 @@
+ 
+ #define SUN55I_A523_DPHY_MAX_REG			0x0f0
+ 
++#define SUN55I_A523_DPHY_FIRST_BASE		0x05810100
++#define SUN55I_A523_DPHY_STRIDE			0x100
++#define SUN55I_A523_DPHY_COUNT			4
++
+ /*
+  * The vendor driver uses 0x28 when neither a sensor-specific settle time nor
+  * an explicit settle-time override is supplied. The relationship between
+@@ -68,6 +72,7 @@ struct sun55i_a523_mipi_dphy {
+ 	struct regmap *regs;
+ 	struct phy *phy;
+ 	struct phy_configure_opts_mipi_dphy config;
++	unsigned int id;
+ };
+ 
+ static int sun55i_a523_mipi_dphy_configure(struct phy *phy,
+@@ -162,13 +167,13 @@ static int sun55i_a523_mipi_dphy_power_on(struct phy *phy)
+ 			   SUN55I_A523_DPHY_FREQ_CNT_EN);
+ 
+ 	/*
+-	 * PHY C is a non-zero vendor PHY instance, for which the vendor
+-	 * initialization programs the clock-lane deskew value to 0x7.
++	 * The vendor initialization uses 0x2 for PHY0 and 0x7 for the
++	 * remaining PHY instances.
+ 	 */
+ 	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_DESKEW1_REG,
+ 			   SUN55I_A523_DPHY_DESKEW1_LANECK_SET,
+ 			   FIELD_PREP(SUN55I_A523_DPHY_DESKEW1_LANECK_SET,
+-				      0x7));
++				      dphy->id ? 0x7 : 0x2));
+ 
+ 	return 0;
+ }
+@@ -203,12 +208,30 @@ static int sun55i_a523_mipi_dphy_probe(struct platform_device *pdev)
+ {
+ 	struct sun55i_a523_mipi_dphy *dphy;
+ 	struct phy_provider *provider;
++	struct resource *res;
++	resource_size_t offset;
+ 	void __iomem *base;
+ 
+ 	dphy = devm_kzalloc(&pdev->dev, sizeof(*dphy), GFP_KERNEL);
+ 	if (!dphy)
+ 		return -ENOMEM;
+ 
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res)
++		return -EINVAL;
++
++	if (res->start < SUN55I_A523_DPHY_FIRST_BASE)
++		return dev_err_probe(&pdev->dev, -EINVAL,
++				     "invalid PHY register address\n");
++
++	offset = res->start - SUN55I_A523_DPHY_FIRST_BASE;
++	if (offset % SUN55I_A523_DPHY_STRIDE ||
++	    offset / SUN55I_A523_DPHY_STRIDE >= SUN55I_A523_DPHY_COUNT)
++		return dev_err_probe(&pdev->dev, -EINVAL,
++				     "invalid PHY register address\n");
++
++	dphy->id = offset / SUN55I_A523_DPHY_STRIDE;
++
+ 	base = devm_platform_ioremap_resource(pdev, 0);
+ 	if (IS_ERR(base))
+ 		return PTR_ERR(base);
+-- 
+2.47.3
+

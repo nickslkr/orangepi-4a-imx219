@@ -1,0 +1,4 @@
+Repository: https://github.com/AvaotaSBC/linux.git
+Branch: linux-5.15
+Commit: a464bc4feaff7b102dac6362b44ac3303ec7cae1
+Purpose: vendor/reference kernel tree used during Orange Pi 4A / T527 / VIN / CSI / MIPI / IMX219 investigation.

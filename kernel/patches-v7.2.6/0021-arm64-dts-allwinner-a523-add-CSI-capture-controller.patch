@@ -1,0 +1,53 @@
+From 3295713d5659a175df4ad95cd0c3b5b6bf642ca5 Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 17:34:35 +0300
+Subject: [PATCH 21/22] arm64: dts: allwinner: a523: add CSI capture controller
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+
+---
+ .../arm64/boot/dts/allwinner/sun55i-a523.dtsi | 28 +++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+index c06f4ecd0..de8c0088c 100644
+--- a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
++++ b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+@@ -929,6 +929,34 @@ mipi2_out: port@1 {
+ 			};
+ 		};
+ 
++		csi: csi@5800800 {
++			compatible = "allwinner,sun55i-a523-csi";
++			reg = <0x05800800 0x200>,
++			      <0x05822000 0x1000>,
++			      <0x05830000 0x1000>;
++			reg-names = "top", "parser", "dma";
++
++			interrupts = <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>;
++
++			clocks = <&ccu CLK_BUS_CSI>,
++				 <&ccu CLK_CSI_TOP>,
++				 <&ccu CLK_MBUS_CSI>;
++			clock-names = "bus", "top", "mbus";
++
++			resets = <&ccu RST_BUS_CSI>;
++
++			status = "disabled";
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				csi_in: port@1 {
++					reg = <1>;
++				};
++			};
++		};
++
+ 		ppu: power-controller@7001400 {
+ 			compatible = "allwinner,sun55i-a523-ppu";
+ 			reg = <0x07001400 0x400>;
+-- 
+2.47.3
+

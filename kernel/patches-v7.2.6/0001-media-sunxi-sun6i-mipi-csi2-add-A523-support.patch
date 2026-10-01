@@ -1,0 +1,406 @@
+From 071b67e81ec5b7538dcb99a65ec323cfb5fa4b6a Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Thu, 24 Sep 2026 23:03:37 +0300
+Subject: [PATCH 01/22] media: sunxi: sun6i-mipi-csi2: add A523 support
+
+Add a per-SoC variant layer while preserving the existing A31 register programming.
+
+Add support for the A523 CSI-2 receiver port register layout, including lane mapping, lane count, CSI-2 data type, trigger configuration and port enable/disable handling.
+
+Unlike the A31 implementation, the A523 variant does not require the fixed 297 MHz module clock rate.
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+---
+ .../sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c   | 208 ++++++++++++++++--
+ .../sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h   |  10 +
+ .../sun6i-mipi-csi2/sun6i_mipi_csi2_reg.h     |  33 +++
+ 3 files changed, 236 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c
+index b06cb7301..eef7b90ca 100644
+--- a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c
++++ b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c
+@@ -4,11 +4,14 @@
+  * Author: Paul Kocialkowski <paul.kocialkowski@bootlin.com>
+  */
+ 
++#include <linux/bitfield.h>
+ #include <linux/clk.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/of_address.h>
+ #include <linux/phy/phy.h>
+ #include <linux/platform_device.h>
++#include <linux/property.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/regmap.h>
+ #include <linux/reset.h>
+@@ -79,7 +82,7 @@ sun6i_mipi_csi2_format_find(u32 mbus_code)
+ 
+ /* Controller */
+ 
+-static void sun6i_mipi_csi2_enable(struct sun6i_mipi_csi2_device *csi2_dev)
++static void sun6i_a31_mipi_csi2_enable(struct sun6i_mipi_csi2_device *csi2_dev)
+ {
+ 	struct regmap *regmap = csi2_dev->regmap;
+ 
+@@ -87,7 +90,7 @@ static void sun6i_mipi_csi2_enable(struct sun6i_mipi_csi2_device *csi2_dev)
+ 			   SUN6I_MIPI_CSI2_CTL_EN, SUN6I_MIPI_CSI2_CTL_EN);
+ }
+ 
+-static void sun6i_mipi_csi2_disable(struct sun6i_mipi_csi2_device *csi2_dev)
++static void sun6i_a31_mipi_csi2_disable(struct sun6i_mipi_csi2_device *csi2_dev)
+ {
+ 	struct regmap *regmap = csi2_dev->regmap;
+ 
+@@ -95,7 +98,7 @@ static void sun6i_mipi_csi2_disable(struct sun6i_mipi_csi2_device *csi2_dev)
+ 			   SUN6I_MIPI_CSI2_CTL_EN, 0);
+ }
+ 
+-static void sun6i_mipi_csi2_configure(struct sun6i_mipi_csi2_device *csi2_dev)
++static int sun6i_a31_mipi_csi2_configure(struct sun6i_mipi_csi2_device *csi2_dev)
+ {
+ 	struct regmap *regmap = csi2_dev->regmap;
+ 	unsigned int lanes_count =
+@@ -107,7 +110,7 @@ static void sun6i_mipi_csi2_configure(struct sun6i_mipi_csi2_device *csi2_dev)
+ 
+ 	format = sun6i_mipi_csi2_format_find(mbus_format->code);
+ 	if (WARN_ON(!format))
+-		return;
++		return -EINVAL;
+ 
+ 	/*
+ 	 * The enable flow in the Allwinner BSP is a bit different: the enable
+@@ -163,6 +166,8 @@ static void sun6i_mipi_csi2_configure(struct sun6i_mipi_csi2_device *csi2_dev)
+ 
+ 	regmap_write(regmap, SUN6I_MIPI_CSI2_CH_INT_PD_REG,
+ 		     SUN6I_MIPI_CSI2_CH_INT_PD_CLEAR);
++
++	return 0;
+ }
+ 
+ /* V4L2 Subdev */
+@@ -260,8 +265,11 @@ static int sun6i_mipi_csi2_s_stream(struct v4l2_subdev *subdev, int on)
+ 
+ 	/* Controller */
+ 
+-	sun6i_mipi_csi2_configure(csi2_dev);
+-	sun6i_mipi_csi2_enable(csi2_dev);
++	ret = csi2_dev->variant->configure(csi2_dev);
++	if (ret)
++		goto error_pm;
++
++	csi2_dev->variant->enable(csi2_dev);
+ 
+ 	/* D-PHY */
+ 
+@@ -281,7 +289,7 @@ static int sun6i_mipi_csi2_s_stream(struct v4l2_subdev *subdev, int on)
+ 
+ disable:
+ 	phy_power_off(dphy);
+-	sun6i_mipi_csi2_disable(csi2_dev);
++	csi2_dev->variant->disable(csi2_dev);
+ 
+ error_pm:
+ 	pm_runtime_put(dev);
+@@ -661,10 +669,13 @@ sun6i_mipi_csi2_resources_setup(struct sun6i_mipi_csi2_device *csi2_dev,
+ 		return PTR_ERR(csi2_dev->clock_mod);
+ 	}
+ 
+-	ret = clk_set_rate_exclusive(csi2_dev->clock_mod, 297000000);
+-	if (ret) {
+-		dev_err(dev, "failed to set mod clock rate\n");
+-		return ret;
++	if (csi2_dev->variant->mod_rate) {
++		ret = clk_set_rate_exclusive(csi2_dev->clock_mod,
++					     csi2_dev->variant->mod_rate);
++		if (ret) {
++			dev_err(dev, "failed to set mod clock rate\n");
++			return ret;
++		}
+ 	}
+ 
+ 	/* Reset */
+@@ -698,7 +709,8 @@ sun6i_mipi_csi2_resources_setup(struct sun6i_mipi_csi2_device *csi2_dev,
+ 	return 0;
+ 
+ error_clock_rate_exclusive:
+-	clk_rate_exclusive_put(csi2_dev->clock_mod);
++	if (csi2_dev->variant->mod_rate)
++		clk_rate_exclusive_put(csi2_dev->clock_mod);
+ 
+ 	return ret;
+ }
+@@ -708,7 +720,9 @@ sun6i_mipi_csi2_resources_cleanup(struct sun6i_mipi_csi2_device *csi2_dev)
+ {
+ 	pm_runtime_disable(csi2_dev->dev);
+ 	phy_exit(csi2_dev->dphy);
+-	clk_rate_exclusive_put(csi2_dev->clock_mod);
++
++	if (csi2_dev->variant->mod_rate)
++		clk_rate_exclusive_put(csi2_dev->clock_mod);
+ }
+ 
+ static int sun6i_mipi_csi2_probe(struct platform_device *platform_dev)
+@@ -722,6 +736,10 @@ static int sun6i_mipi_csi2_probe(struct platform_device *platform_dev)
+ 		return -ENOMEM;
+ 
+ 	csi2_dev->dev = dev;
++	csi2_dev->variant = device_get_match_data(dev);
++	if (!csi2_dev->variant)
++		return -EINVAL;
++
+ 	platform_set_drvdata(platform_dev, csi2_dev);
+ 
+ 	ret = sun6i_mipi_csi2_resources_setup(csi2_dev, platform_dev);
+@@ -749,8 +767,168 @@ static void sun6i_mipi_csi2_remove(struct platform_device *platform_dev)
+ 	sun6i_mipi_csi2_resources_cleanup(csi2_dev);
+ }
+ 
++static const u8 sun55i_a523_mipi_csi2_lane_map[][4] = {
++	{ 0, 1, 4, 5 },
++	{ 4, 5, 0, 0 },
++	{ 8, 9, 12, 13 },
++	{ 12, 13, 0, 0 },
++};
++
++static int
++sun55i_a523_mipi_csi2_port_id(struct sun6i_mipi_csi2_device *csi2_dev)
++{
++	struct resource resource;
++	resource_size_t offset;
++	int ret;
++
++	ret = of_address_to_resource(csi2_dev->dev->of_node, 0, &resource);
++	if (ret)
++		return ret;
++
++	if (resource.start < SUN55I_A523_MIPI_CSI2_PORT_BASE)
++		return -EINVAL;
++
++	offset = resource.start - SUN55I_A523_MIPI_CSI2_PORT_BASE;
++	if (offset % SUN55I_A523_MIPI_CSI2_PORT_STRIDE)
++		return -EINVAL;
++
++	offset /= SUN55I_A523_MIPI_CSI2_PORT_STRIDE;
++	if (offset >= SUN55I_A523_MIPI_CSI2_PORT_COUNT)
++		return -EINVAL;
++
++	return offset;
++}
++
++static void
++sun55i_a523_mipi_csi2_enable(struct sun6i_mipi_csi2_device *csi2_dev)
++{
++	regmap_update_bits(csi2_dev->regmap,
++			   SUN55I_A523_MIPI_CSI2_PORT_CTL_REG,
++			   SUN55I_A523_MIPI_CSI2_PORT_CTL_EN,
++			   SUN55I_A523_MIPI_CSI2_PORT_CTL_EN);
++}
++
++static void
++sun55i_a523_mipi_csi2_disable(struct sun6i_mipi_csi2_device *csi2_dev)
++{
++	regmap_update_bits(csi2_dev->regmap,
++			   SUN55I_A523_MIPI_CSI2_PORT_CTL_REG,
++			   SUN55I_A523_MIPI_CSI2_PORT_CTL_EN, 0);
++}
++
++static int
++sun55i_a523_mipi_csi2_configure(struct sun6i_mipi_csi2_device *csi2_dev)
++{
++	struct v4l2_mbus_framefmt *mbus_format =
++		&csi2_dev->bridge.mbus_format;
++	unsigned int lanes_count =
++		csi2_dev->bridge.endpoint.bus.mipi_csi2.num_data_lanes;
++	const struct sun6i_mipi_csi2_format *format;
++	const u8 *lane_map;
++	u32 lane_map_value = 0;
++	unsigned int lane;
++	int port_id;
++
++	format = sun6i_mipi_csi2_format_find(mbus_format->code);
++	if (WARN_ON(!format))
++		return -EINVAL;
++
++	port_id = sun55i_a523_mipi_csi2_port_id(csi2_dev);
++	if (port_id < 0) {
++		dev_err(csi2_dev->dev,
++			"invalid A523 MIPI CSI-2 port address\n");
++		return port_id;
++	}
++
++	if (!lanes_count ||
++	    lanes_count > ARRAY_SIZE(sun55i_a523_mipi_csi2_lane_map[0]) ||
++	    ((port_id == 1 || port_id == 3) && lanes_count > 2)) {
++		dev_err(csi2_dev->dev,
++			"invalid lane count %u for A523 MIPI CSI-2 port %d\n",
++			lanes_count, port_id);
++		return -EINVAL;
++	}
++
++	lane_map = sun55i_a523_mipi_csi2_lane_map[port_id];
++
++	for (lane = 0; lane < lanes_count; lane++)
++		lane_map_value |= lane_map[lane] << (lane * 4);
++
++	regmap_write(csi2_dev->regmap,
++		     SUN55I_A523_MIPI_CSI2_LANE_MAP0_REG,
++		     lane_map_value);
++
++	/*
++	 * SUN55IW3 writes the actual lane count into LANE_NUM.
++	 * One virtual channel is encoded as CHANNEL_NUM = 0.
++	 * OUT_NUM = 1 corresponds to the vendor TWO_DATA setting.
++	 */
++	regmap_update_bits(csi2_dev->regmap,
++			   SUN55I_A523_MIPI_CSI2_PORT_CTL_REG,
++			   SUN55I_A523_MIPI_CSI2_PORT_CTL_LANE_NUM |
++			   SUN55I_A523_MIPI_CSI2_PORT_CTL_CHANNEL_NUM |
++			   SUN55I_A523_MIPI_CSI2_PORT_CTL_OUT_NUM,
++			   FIELD_PREP(
++				SUN55I_A523_MIPI_CSI2_PORT_CTL_LANE_NUM,
++				lanes_count) |
++			   SUN55I_A523_MIPI_CSI2_PORT_CTL_OUT_NUM);
++
++	/*
++	 * Match cmb_port_mipi_cfg(): unpack enabled, packet-header
++	 * bit order zero. YUV sequence is zero; it is irrelevant to RAW.
++	 */
++	regmap_update_bits(csi2_dev->regmap,
++			   SUN55I_A523_MIPI_CSI2_MIPI_CFG_REG,
++			   SUN55I_A523_MIPI_CSI2_MIPI_CFG_UNPACK_EN |
++			   SUN55I_A523_MIPI_CSI2_MIPI_CFG_PH_BITORD |
++			   SUN55I_A523_MIPI_CSI2_MIPI_CFG_YUV_SEQ,
++			   SUN55I_A523_MIPI_CSI2_MIPI_CFG_UNPACK_EN);
++
++	/* VC0 and the CSI-2 datatype associated with the mbus format. */
++	regmap_write(csi2_dev->regmap,
++		     SUN55I_A523_MIPI_CSI2_MIPI_DI_REG,
++		     FIELD_PREP(SUN55I_A523_MIPI_CSI2_MIPI_DI_CH0_DT,
++				format->data_type));
++
++	/*
++	 * Match cmb_port_mipi_ch_trigger_en(..., 0, 1).
++	 * SRC_IS_FIELD remains clear for progressive capture.
++	 */
++	regmap_write(csi2_dev->regmap,
++		     SUN55I_A523_MIPI_CSI2_MIPI_DI_TRIG_REG,
++		     SUN55I_A523_MIPI_CSI2_MIPI_TRIG_FS |
++		     SUN55I_A523_MIPI_CSI2_MIPI_TRIG_FE |
++		     SUN55I_A523_MIPI_CSI2_MIPI_TRIG_LS |
++		     SUN55I_A523_MIPI_CSI2_MIPI_TRIG_LE |
++		     SUN55I_A523_MIPI_CSI2_MIPI_TRIG_YUV |
++		     SUN55I_A523_MIPI_CSI2_MIPI_TRIG_RGB |
++		     SUN55I_A523_MIPI_CSI2_MIPI_TRIG_RAW);
++
++	return 0;
++}
++
++static const struct sun6i_mipi_csi2_variant sun6i_a31_mipi_csi2_variant = {
++	.configure      = sun6i_a31_mipi_csi2_configure,
++	.enable         = sun6i_a31_mipi_csi2_enable,
++	.disable        = sun6i_a31_mipi_csi2_disable,
++	.mod_rate       = 297000000,
++};
++
++static const struct sun6i_mipi_csi2_variant sun55i_a523_mipi_csi2_variant = {
++	.configure      = sun55i_a523_mipi_csi2_configure,
++	.enable         = sun55i_a523_mipi_csi2_enable,
++	.disable        = sun55i_a523_mipi_csi2_disable,
++};
++
+ static const struct of_device_id sun6i_mipi_csi2_of_match[] = {
+-	{ .compatible	= "allwinner,sun6i-a31-mipi-csi2" },
++	{
++		.compatible     = "allwinner,sun6i-a31-mipi-csi2",
++		.data           = &sun6i_a31_mipi_csi2_variant,
++	},
++	{
++		.compatible     = "allwinner,sun55i-a523-mipi-csi2",
++		.data           = &sun55i_a523_mipi_csi2_variant,
++	},
+ 	{},
+ };
+ MODULE_DEVICE_TABLE(of, sun6i_mipi_csi2_of_match);
+@@ -766,6 +944,6 @@ static struct platform_driver sun6i_mipi_csi2_platform_driver = {
+ };
+ module_platform_driver(sun6i_mipi_csi2_platform_driver);
+ 
+-MODULE_DESCRIPTION("Allwinner A31 MIPI CSI-2 Controller Driver");
++MODULE_DESCRIPTION("Allwinner MIPI CSI-2 Controller Driver");
+ MODULE_AUTHOR("Paul Kocialkowski <paul.kocialkowski@bootlin.com>");
+ MODULE_LICENSE("GPL");
+diff --git a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h
+index 24b15e34b..b297a09a6 100644
+--- a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h
++++ b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h
+@@ -21,6 +21,15 @@ enum sun6i_mipi_csi2_pad {
+ 	SUN6I_MIPI_CSI2_PAD_COUNT	= 2,
+ };
+ 
++struct sun6i_mipi_csi2_device;
++
++struct sun6i_mipi_csi2_variant {
++	int     (*configure)(struct sun6i_mipi_csi2_device *csi2_dev);
++	void    (*enable)(struct sun6i_mipi_csi2_device *csi2_dev);
++	void    (*disable)(struct sun6i_mipi_csi2_device *csi2_dev);
++	unsigned long   mod_rate;
++};
++
+ struct sun6i_mipi_csi2_format {
+ 	u32	mbus_code;
+ 	u8	data_type;
+@@ -40,6 +49,7 @@ struct sun6i_mipi_csi2_bridge {
+ 
+ struct sun6i_mipi_csi2_device {
+ 	struct device			*dev;
++	const struct sun6i_mipi_csi2_variant *variant;
+ 
+ 	struct regmap			*regmap;
+ 	struct clk			*clock_mod;
+diff --git a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2_reg.h b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2_reg.h
+index d9c92cf2b..6de365625 100644
+--- a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2_reg.h
++++ b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2_reg.h
+@@ -73,4 +73,37 @@
+ #define SUN6I_MIPI_CSI2_CH_REG(reg, ch) \
+ 	(SUN6I_MIPI_CSI2_CH_OFFSET * (ch) + (reg))
+ 
++/* Allwinner A523 / SUN55IW3 Combo CSI PORT */
++
++#define SUN55I_A523_MIPI_CSI2_PORT_BASE                 0x05811000
++#define SUN55I_A523_MIPI_CSI2_PORT_STRIDE               0x400
++#define SUN55I_A523_MIPI_CSI2_PORT_COUNT                4
++
++#define SUN55I_A523_MIPI_CSI2_PORT_CTL_REG              0x0000
++#define SUN55I_A523_MIPI_CSI2_PORT_CTL_EN               BIT(0)
++#define SUN55I_A523_MIPI_CSI2_PORT_CTL_LANE_NUM         GENMASK(11, 8)
++#define SUN55I_A523_MIPI_CSI2_PORT_CTL_CHANNEL_NUM      GENMASK(17, 16)
++#define SUN55I_A523_MIPI_CSI2_PORT_CTL_OUT_NUM          BIT(31)
++
++#define SUN55I_A523_MIPI_CSI2_LANE_MAP0_REG             0x0004
++
++#define SUN55I_A523_MIPI_CSI2_MIPI_CFG_REG              0x0100
++#define SUN55I_A523_MIPI_CSI2_MIPI_CFG_UNPACK_EN        BIT(0)
++#define SUN55I_A523_MIPI_CSI2_MIPI_CFG_PH_BITORD        BIT(6)
++#define SUN55I_A523_MIPI_CSI2_MIPI_CFG_YUV_SEQ          GENMASK(17, 16)
++
++#define SUN55I_A523_MIPI_CSI2_MIPI_DI_REG               0x0108
++#define SUN55I_A523_MIPI_CSI2_MIPI_DI_CH0_DT            GENMASK(5, 0)
++#define SUN55I_A523_MIPI_CSI2_MIPI_DI_CH0_VC            GENMASK(7, 6)
++
++#define SUN55I_A523_MIPI_CSI2_MIPI_DI_TRIG_REG          0x0110
++#define SUN55I_A523_MIPI_CSI2_MIPI_TRIG_FS              BIT(0)
++#define SUN55I_A523_MIPI_CSI2_MIPI_TRIG_FE              BIT(1)
++#define SUN55I_A523_MIPI_CSI2_MIPI_TRIG_LS              BIT(2)
++#define SUN55I_A523_MIPI_CSI2_MIPI_TRIG_LE              BIT(3)
++#define SUN55I_A523_MIPI_CSI2_MIPI_TRIG_YUV             BIT(17)
++#define SUN55I_A523_MIPI_CSI2_MIPI_TRIG_RGB             BIT(18)
++#define SUN55I_A523_MIPI_CSI2_MIPI_TRIG_RAW             BIT(19)
++#define SUN55I_A523_MIPI_CSI2_MIPI_TRIG_SRC_IS_FIELD    BIT(30)
++
+ #endif
+-- 
+2.47.3
+

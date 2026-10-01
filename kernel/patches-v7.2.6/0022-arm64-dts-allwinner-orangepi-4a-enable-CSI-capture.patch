@@ -1,0 +1,38 @@
+From 89adc7bcc446defdb386ccec4851b88c4c07f14c Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 17:35:21 +0300
+Subject: [PATCH 22/22] arm64: dts: allwinner: orangepi-4a: enable CSI capture
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+
+---
+ .../dts/allwinner/sun55i-t527-orangepi-4a.dts    | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts b/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts
+index 81eb6e968..389d4555f 100644
+--- a/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts
++++ b/arch/arm64/boot/dts/allwinner/sun55i-t527-orangepi-4a.dts
+@@ -504,3 +504,19 @@ &usbphy {
+ 	usb1_vbus-supply = <&reg_usb_vbus>;
+ 	status = "okay";
+ };
++
++&csi {
++	status = "okay";
++};
++
++&mipi2_out {
++	mipi2_out_csi: endpoint {
++		remote-endpoint = <&csi_in_mipi2>;
++	};
++};
++
++&csi_in {
++	csi_in_mipi2: endpoint {
++		remote-endpoint = <&mipi2_out_csi>;
++	};
++};
+-- 
+2.47.3
+

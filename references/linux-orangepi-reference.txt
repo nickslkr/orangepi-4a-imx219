@@ -1,0 +1,4 @@
+Repository: https://github.com/orangepi-xunlong/linux-orangepi.git
+Branch: orange-pi-5.15-sun55iw3
+Commit: 5b956b750422abd5e9e9c5523540d2aaf41a7939
+Purpose: vendor/reference kernel tree used during Orange Pi 4A / T527 / IMX219 investigation.

@@ -1,0 +1,37 @@
+From f2e50b1131d9e7a2313b9b4c0bb563bf0703763a Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Thu, 24 Sep 2026 23:05:51 +0300
+Subject: [PATCH 02/22] arm64: dts: allwinner: a523: add MIPI2 2-lane pinctrl
+
+Add the PK12-PK17 MIPI CSI pin group used by the A523 MIPI2 receiver in 2-lane mode.
+
+The pins use the mcsic function with mux value 2, matching the vendor pinctrl description.
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+---
+ arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+index ca6a16807..58edebda8 100644
+--- a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
++++ b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+@@ -162,6 +162,15 @@ ledc_ph_pin: ledc-ph-pin {
+ 				allwinner,pinmux = <5>;
+ 			};
+ 
++			/omit-if-no-ref/
++			mipi2_2lane_pins: mipi2-2lane-pins {
++				pins = "PK12", "PK13", "PK14",
++				       "PK15", "PK16", "PK17";
++				function = "mcsic";
++				allwinner,pinmux = <2>;
++				drive-strength = <10>;
++			};
++
+ 			mmc0_pins: mmc0-pins {
+ 				pins = "PF0" ,"PF1", "PF2", "PF3", "PF4", "PF5";
+ 				allwinner,pinmux = <2>;
+-- 
+2.47.3
+

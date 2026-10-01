@@ -1,0 +1,154 @@
+From 86a471937663b91cb30a33c7723f2732a3e614bf Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 18:13:20 +0300
+Subject: [PATCH 04/22] media: sunxi: sun6i-mipi-csi2: make resources
+ variant-specific
+
+The A31 MIPI CSI-2 controller requires a bus clock, module clock and reset, while the A523 CSI-2 port block does not expose those resources in its device tree node.
+
+Describe these requirements in the per-SoC variant data and only acquire or control the resources required by a given variant.
+
+This preserves the existing A31 behaviour while allowing the A523 receiver port to use its MMIO resource and external D-PHY without synthetic clock or reset entries.
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+---
+ .../sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c   | 66 ++++++++++++-------
+ .../sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h   |  3 +
+ 2 files changed, 46 insertions(+), 23 deletions(-)
+
+diff --git a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c
+index eef7b90ca..be8779e00 100644
+--- a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c
++++ b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.c
+@@ -596,8 +596,11 @@ static int sun6i_mipi_csi2_suspend(struct device *dev)
+ {
+ 	struct sun6i_mipi_csi2_device *csi2_dev = dev_get_drvdata(dev);
+ 
+-	clk_disable_unprepare(csi2_dev->clock_mod);
+-	reset_control_assert(csi2_dev->reset);
++	if (csi2_dev->variant->has_mod_clock)
++		clk_disable_unprepare(csi2_dev->clock_mod);
++
++	if (csi2_dev->variant->has_reset)
++		reset_control_assert(csi2_dev->reset);
+ 
+ 	return 0;
+ }
+@@ -607,22 +610,27 @@ static int sun6i_mipi_csi2_resume(struct device *dev)
+ 	struct sun6i_mipi_csi2_device *csi2_dev = dev_get_drvdata(dev);
+ 	int ret;
+ 
+-	ret = reset_control_deassert(csi2_dev->reset);
+-	if (ret) {
+-		dev_err(dev, "failed to deassert reset\n");
+-		return ret;
++	if (csi2_dev->variant->has_reset) {
++		ret = reset_control_deassert(csi2_dev->reset);
++		if (ret) {
++			dev_err(dev, "failed to deassert reset\n");
++			return ret;
++		}
+ 	}
+ 
+-	ret = clk_prepare_enable(csi2_dev->clock_mod);
+-	if (ret) {
+-		dev_err(dev, "failed to enable module clock\n");
+-		goto error_reset;
++	if (csi2_dev->variant->has_mod_clock) {
++		ret = clk_prepare_enable(csi2_dev->clock_mod);
++		if (ret) {
++			dev_err(dev, "failed to enable module clock\n");
++			goto error_reset;
++		}
+ 	}
+ 
+ 	return 0;
+ 
+ error_reset:
+-	reset_control_assert(csi2_dev->reset);
++	if (csi2_dev->variant->has_reset)
++		reset_control_assert(csi2_dev->reset);
+ 
+ 	return ret;
+ }
+@@ -653,9 +661,14 @@ sun6i_mipi_csi2_resources_setup(struct sun6i_mipi_csi2_device *csi2_dev,
+ 	if (IS_ERR(io_base))
+ 		return PTR_ERR(io_base);
+ 
+-	csi2_dev->regmap =
+-		devm_regmap_init_mmio_clk(dev, "bus", io_base,
+-					  &sun6i_mipi_csi2_regmap_config);
++	if (csi2_dev->variant->has_bus_clock)
++		csi2_dev->regmap =
++			devm_regmap_init_mmio_clk(dev, "bus", io_base,
++						  &sun6i_mipi_csi2_regmap_config);
++	else
++		csi2_dev->regmap =
++			devm_regmap_init_mmio(dev, io_base,
++					     &sun6i_mipi_csi2_regmap_config);
+ 	if (IS_ERR(csi2_dev->regmap)) {
+ 		dev_err(dev, "failed to init register map\n");
+ 		return PTR_ERR(csi2_dev->regmap);
+@@ -663,10 +676,12 @@ sun6i_mipi_csi2_resources_setup(struct sun6i_mipi_csi2_device *csi2_dev,
+ 
+ 	/* Clock */
+ 
+-	csi2_dev->clock_mod = devm_clk_get(dev, "mod");
+-	if (IS_ERR(csi2_dev->clock_mod)) {
+-		dev_err(dev, "failed to acquire mod clock\n");
+-		return PTR_ERR(csi2_dev->clock_mod);
++	if (csi2_dev->variant->has_mod_clock) {
++		csi2_dev->clock_mod = devm_clk_get(dev, "mod");
++		if (IS_ERR(csi2_dev->clock_mod)) {
++			dev_err(dev, "failed to acquire mod clock\n");
++			return PTR_ERR(csi2_dev->clock_mod);
++		}
+ 	}
+ 
+ 	if (csi2_dev->variant->mod_rate) {
+@@ -680,11 +695,13 @@ sun6i_mipi_csi2_resources_setup(struct sun6i_mipi_csi2_device *csi2_dev,
+ 
+ 	/* Reset */
+ 
+-	csi2_dev->reset = devm_reset_control_get_shared(dev, NULL);
+-	if (IS_ERR(csi2_dev->reset)) {
+-		dev_err(dev, "failed to get reset controller\n");
+-		ret = PTR_ERR(csi2_dev->reset);
+-		goto error_clock_rate_exclusive;
++	if (csi2_dev->variant->has_reset) {
++		csi2_dev->reset = devm_reset_control_get_shared(dev, NULL);
++		if (IS_ERR(csi2_dev->reset)) {
++			dev_err(dev, "failed to get reset controller\n");
++			ret = PTR_ERR(csi2_dev->reset);
++			goto error_clock_rate_exclusive;
++		}
+ 	}
+ 
+ 	/* D-PHY */
+@@ -912,6 +929,9 @@ static const struct sun6i_mipi_csi2_variant sun6i_a31_mipi_csi2_variant = {
+ 	.enable         = sun6i_a31_mipi_csi2_enable,
+ 	.disable        = sun6i_a31_mipi_csi2_disable,
+ 	.mod_rate       = 297000000,
++	.has_bus_clock  = true,
++	.has_mod_clock  = true,
++	.has_reset      = true,
+ };
+ 
+ static const struct sun6i_mipi_csi2_variant sun55i_a523_mipi_csi2_variant = {
+diff --git a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h
+index b297a09a6..a40c03fee 100644
+--- a/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h
++++ b/drivers/media/platform/sunxi/sun6i-mipi-csi2/sun6i_mipi_csi2.h
+@@ -28,6 +28,9 @@ struct sun6i_mipi_csi2_variant {
+ 	void    (*enable)(struct sun6i_mipi_csi2_device *csi2_dev);
+ 	void    (*disable)(struct sun6i_mipi_csi2_device *csi2_dev);
+ 	unsigned long   mod_rate;
++	bool    has_bus_clock;
++	bool    has_mod_clock;
++	bool    has_reset;
+ };
+ 
+ struct sun6i_mipi_csi2_format {
+-- 
+2.47.3
+

@@ -1,0 +1,17 @@
+[Unit]
+Description=IMX219 OpenCL YUV420 Producer
+After=local-fs.target
+Before=imx219-streamer@%i.service
+
+[Service]
+Type=simple
+User=%i
+Environment=RUSTICL_ENABLE=panfrost
+ExecStart=/usr/local/bin/imx219_ocl_producer
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

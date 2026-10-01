@@ -1,0 +1,60 @@
+From 42b79ce83092bc49769780179e13bcf6ae987b08 Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 21:00:47 +0300
+Subject: [PATCH 08/22] arm64: dts: allwinner: a523: add MIPI2 CSI-2 receiver
+
+Add the A523 MIPI2 CSI-2 receive path blocks used by camera sensors.
+
+Describe PHY C at 0x05810300 as a Generic PHY provider and PORT2 at 0x05811800 as the MIPI CSI-2 receiver. Connect PORT2 to PHY C through the dphy phandle and provide empty input and output graph ports for board-level endpoints.
+
+Keep both blocks disabled by default.
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+---
+ .../arm64/boot/dts/allwinner/sun55i-a523.dtsi | 30 +++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+index 58edebda8..3114c574d 100644
+--- a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
++++ b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+@@ -882,6 +882,36 @@ gmac1_mtl_tx_setup: tx-queues-config {
+ 			};
+ 		};
+ 
++		dphy2: phy@5810300 {
++			compatible = "allwinner,sun55i-a523-mipi-dphy";
++			reg = <0x05810300 0x100>;
++			#phy-cells = <0>;
++			status = "disabled";
++		};
++
++		mipi2: csi@5811800 {
++			compatible = "allwinner,sun55i-a523-mipi-csi2";
++			reg = <0x05811800 0x400>;
++
++			phys = <&dphy2>;
++			phy-names = "dphy";
++
++			status = "disabled";
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				mipi2_in: port@0 {
++					reg = <0>;
++				};
++
++				mipi2_out: port@1 {
++					reg = <1>;
++				};
++			};
++		};
++
+ 		ppu: power-controller@7001400 {
+ 			compatible = "allwinner,sun55i-a523-ppu";
+ 			reg = <0x07001400 0x400>;
+-- 
+2.47.3
+

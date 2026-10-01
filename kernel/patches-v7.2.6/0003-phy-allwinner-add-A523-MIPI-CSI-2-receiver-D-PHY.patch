@@ -1,0 +1,314 @@
+From 0b856c898444cd4bee388041b47fb5497d1ab83d Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 17:47:11 +0300
+Subject: [PATCH 03/22] phy: allwinner: add A523 MIPI CSI-2 receiver D-PHY
+
+Add a Generic PHY provider for the MIPI CSI-2 receiver D-PHY found in Allwinner A523 family SoCs.
+
+Implement the vendor-confirmed receive path initialization sequence, including lane enables, offset calibration, termination and HS controls, serial-to-parallel configuration, MIPI RX controls, frequency counting and clock-lane deskew.
+
+Support one- and two-data-lane operation. Four-lane operation requires combining adjacent PHY instances and separate global link-mode programming, so leave it unsupported for now.
+
+Use the vendor fallback value 0x28 for the S2P delay because the hardware encoding is not documented well enough to derive it reliably from generic MIPI D-PHY timing values.
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+---
+ drivers/phy/allwinner/Kconfig                 |  13 +
+ drivers/phy/allwinner/Makefile                |   1 +
+ .../phy/allwinner/phy-sun55i-a523-mipi-dphy.c | 251 ++++++++++++++++++
+ 3 files changed, 265 insertions(+)
+ create mode 100644 drivers/phy/allwinner/phy-sun55i-a523-mipi-dphy.c
+
+diff --git a/drivers/phy/allwinner/Kconfig b/drivers/phy/allwinner/Kconfig
+index fb584518b..ef62ab993 100644
+--- a/drivers/phy/allwinner/Kconfig
++++ b/drivers/phy/allwinner/Kconfig
+@@ -32,6 +32,19 @@ config PHY_SUN6I_MIPI_DPHY
+ 	  MIPI-DSI support. If M is selected, the module will be
+ 	  called sun6i_mipi_dphy.
+ 
++config PHY_SUN55I_A523_MIPI_DPHY
++	tristate "Allwinner A523 MIPI D-PHY Support"
++	depends on ARCH_SUNXI || COMPILE_TEST
++	depends on HAS_IOMEM
++	select GENERIC_PHY
++	select GENERIC_PHY_MIPI_DPHY
++	select REGMAP_MMIO
++	help
++	  Enable this to support the MIPI CSI-2 receiver D-PHY
++	  found in Allwinner A523 family SoCs. The PHY receives
++	  MIPI CSI-2 traffic from camera sensors and provides it
++	  to the SoC CSI-2 receiver controller.
++
+ config PHY_SUN9I_USB
+ 	tristate "Allwinner sun9i SoC USB PHY driver"
+ 	depends on ARCH_SUNXI || COMPILE_TEST
+diff --git a/drivers/phy/allwinner/Makefile b/drivers/phy/allwinner/Makefile
+index bd74901a1..c913d0fce 100644
+--- a/drivers/phy/allwinner/Makefile
++++ b/drivers/phy/allwinner/Makefile
+@@ -3,3 +3,4 @@ obj-$(CONFIG_PHY_SUN4I_USB)		+= phy-sun4i-usb.o
+ obj-$(CONFIG_PHY_SUN6I_MIPI_DPHY)	+= phy-sun6i-mipi-dphy.o
+ obj-$(CONFIG_PHY_SUN9I_USB)		+= phy-sun9i-usb.o
+ obj-$(CONFIG_PHY_SUN50I_USB3)		+= phy-sun50i-usb3.o
++obj-$(CONFIG_PHY_SUN55I_A523_MIPI_DPHY) += phy-sun55i-a523-mipi-dphy.o
+diff --git a/drivers/phy/allwinner/phy-sun55i-a523-mipi-dphy.c b/drivers/phy/allwinner/phy-sun55i-a523-mipi-dphy.c
+new file mode 100644
+index 000000000..ecad6d707
+--- /dev/null
++++ b/drivers/phy/allwinner/phy-sun55i-a523-mipi-dphy.c
+@@ -0,0 +1,251 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Allwinner A523 MIPI CSI-2 receiver D-PHY
++ */
++
++#include <linux/bitfield.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/phy/phy.h>
++#include <linux/phy/phy-mipi-dphy.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++
++#define SUN55I_A523_DPHY_CTL_REG			0x000
++#define SUN55I_A523_DPHY_CTL_EN			BIT(0)
++#define SUN55I_A523_DPHY_CTL_LANEDT_EN		GENMASK(7, 4)
++#define SUN55I_A523_DPHY_CTL_LANECK_EN		GENMASK(9, 8)
++#define SUN55I_A523_DPHY_CTL_LP_PEFI		BIT(12)
++#define SUN55I_A523_DPHY_CTL_HS_PEFI		GENMASK(18, 16)
++#define SUN55I_A523_DPHY_CTL_IBIAS_EN		BIT(26)
++#define SUN55I_A523_DPHY_CTL_WORK_MODE		GENMASK(29, 28)
++
++#define SUN55I_A523_DPHY_OFSCAL0_REG		0x008
++#define SUN55I_A523_DPHY_OFSCAL0_AUTO		BIT(4)
++#define SUN55I_A523_DPHY_OFSCAL0_SOFT		BIT(12)
++
++#define SUN55I_A523_DPHY_OFSCAL1_REG		0x00c
++#define SUN55I_A523_DPHY_OFSCAL1_SET		GENMASK(24, 20)
++
++#define SUN55I_A523_DPHY_DESKEW1_REG		0x018
++#define SUN55I_A523_DPHY_DESKEW1_LANECK_SET	GENMASK(24, 20)
++
++#define SUN55I_A523_DPHY_TERM_CTL_REG		0x020
++#define SUN55I_A523_DPHY_TERM_CTL_DT_EN		GENMASK(3, 0)
++#define SUN55I_A523_DPHY_TERM_CTL_CK_EN		GENMASK(5, 4)
++#define SUN55I_A523_DPHY_TERM_CTL_DLY		GENMASK(23, 16)
++
++#define SUN55I_A523_DPHY_HS_CTL_REG		0x024
++#define SUN55I_A523_DPHY_HS_CTL_DT_EN		GENMASK(3, 0)
++#define SUN55I_A523_DPHY_HS_CTL_CK_EN		GENMASK(5, 4)
++#define SUN55I_A523_DPHY_HS_CTL_DLY		GENMASK(23, 16)
++
++#define SUN55I_A523_DPHY_S2P_CTL_REG		0x028
++#define SUN55I_A523_DPHY_S2P_CTL_EN		GENMASK(3, 0)
++#define SUN55I_A523_DPHY_S2P_CTL_WIDTH		GENMASK(9, 8)
++#define SUN55I_A523_DPHY_S2P_CTL_DLY		GENMASK(23, 16)
++
++#define SUN55I_A523_DPHY_MIPIRX_CTL_REG		0x02c
++#define SUN55I_A523_DPHY_MIPIRX_SYNC_MODE	BIT(2)
++#define SUN55I_A523_DPHY_MIPIRX_LPDT_EN	GENMASK(11, 8)
++#define SUN55I_A523_DPHY_MIPIRX_LPCK_EN	GENMASK(13, 12)
++#define SUN55I_A523_DPHY_MIPIRX_LP_DBC_EN	BIT(16)
++
++#define SUN55I_A523_DPHY_FREQ_CNT_REG		0x034
++#define SUN55I_A523_DPHY_FREQ_CNT_EN		BIT(0)
++
++#define SUN55I_A523_DPHY_MAX_REG			0x0f0
++
++/*
++ * The vendor driver uses 0x28 when neither a sensor-specific settle time nor
++ * an explicit settle-time override is supplied. The relationship between
++ * this hardware field and the generic MIPI D-PHY timing values is not
++ * documented, so retain the vendor fallback for now.
++ */
++#define SUN55I_A523_DPHY_S2P_DLY_DEFAULT	0x28
++
++struct sun55i_a523_mipi_dphy {
++	struct regmap *regs;
++	struct phy *phy;
++	struct phy_configure_opts_mipi_dphy config;
++};
++
++static int sun55i_a523_mipi_dphy_configure(struct phy *phy,
++					    union phy_configure_opts *opts)
++{
++	struct sun55i_a523_mipi_dphy *dphy = phy_get_drvdata(phy);
++	struct phy_configure_opts_mipi_dphy *config = &opts->mipi_dphy;
++	int ret;
++
++	ret = phy_mipi_dphy_config_validate(config);
++	if (ret)
++		return ret;
++
++	/*
++	 * A single A523 combo PHY handles up to two data lanes. Four-lane
++	 * operation combines adjacent PHY instances and requires additional
++	 * global link-mode programming.
++	 */
++	if (!config->lanes || config->lanes > 2)
++		return -EINVAL;
++
++	dphy->config = *config;
++
++	return 0;
++}
++
++static int sun55i_a523_mipi_dphy_power_on(struct phy *phy)
++{
++	struct sun55i_a523_mipi_dphy *dphy = phy_get_drvdata(phy);
++	unsigned int lanes = dphy->config.lanes;
++	u32 lane_mask = GENMASK(lanes - 1, 0);
++	u32 mask;
++	u32 value;
++
++	mask = SUN55I_A523_DPHY_CTL_LANEDT_EN |
++	       SUN55I_A523_DPHY_CTL_LANECK_EN |
++	       SUN55I_A523_DPHY_CTL_LP_PEFI |
++	       SUN55I_A523_DPHY_CTL_HS_PEFI |
++	       SUN55I_A523_DPHY_CTL_IBIAS_EN |
++	       SUN55I_A523_DPHY_CTL_WORK_MODE;
++
++	value = FIELD_PREP(SUN55I_A523_DPHY_CTL_LANEDT_EN, lane_mask) |
++		FIELD_PREP(SUN55I_A523_DPHY_CTL_LANECK_EN, 1) |
++		SUN55I_A523_DPHY_CTL_LP_PEFI |
++		FIELD_PREP(SUN55I_A523_DPHY_CTL_HS_PEFI, 4) |
++		SUN55I_A523_DPHY_CTL_IBIAS_EN;
++
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_CTL_REG, mask, value);
++
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_OFSCAL0_REG,
++			   SUN55I_A523_DPHY_OFSCAL0_AUTO |
++			   SUN55I_A523_DPHY_OFSCAL0_SOFT,
++			   SUN55I_A523_DPHY_OFSCAL0_SOFT);
++
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_OFSCAL1_REG,
++			   SUN55I_A523_DPHY_OFSCAL1_SET,
++			   FIELD_PREP(SUN55I_A523_DPHY_OFSCAL1_SET, 0x13));
++
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_TERM_CTL_REG,
++			   SUN55I_A523_DPHY_TERM_CTL_DT_EN |
++			   SUN55I_A523_DPHY_TERM_CTL_CK_EN |
++			   SUN55I_A523_DPHY_TERM_CTL_DLY, 0);
++
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_HS_CTL_REG,
++			   SUN55I_A523_DPHY_HS_CTL_DT_EN |
++			   SUN55I_A523_DPHY_HS_CTL_CK_EN |
++			   SUN55I_A523_DPHY_HS_CTL_DLY, 0);
++
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_S2P_CTL_REG,
++			   SUN55I_A523_DPHY_S2P_CTL_EN |
++			   SUN55I_A523_DPHY_S2P_CTL_WIDTH |
++			   SUN55I_A523_DPHY_S2P_CTL_DLY,
++			   FIELD_PREP(SUN55I_A523_DPHY_S2P_CTL_WIDTH, 3) |
++			   FIELD_PREP(SUN55I_A523_DPHY_S2P_CTL_DLY,
++				      SUN55I_A523_DPHY_S2P_DLY_DEFAULT));
++
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_MIPIRX_CTL_REG,
++			   SUN55I_A523_DPHY_MIPIRX_SYNC_MODE |
++			   SUN55I_A523_DPHY_MIPIRX_LPDT_EN |
++			   SUN55I_A523_DPHY_MIPIRX_LPCK_EN |
++			   SUN55I_A523_DPHY_MIPIRX_LP_DBC_EN,
++			   FIELD_PREP(SUN55I_A523_DPHY_MIPIRX_LPDT_EN,
++				      lane_mask) |
++			   FIELD_PREP(SUN55I_A523_DPHY_MIPIRX_LPCK_EN, 1));
++
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_CTL_REG,
++			   SUN55I_A523_DPHY_CTL_EN,
++			   SUN55I_A523_DPHY_CTL_EN);
++
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_FREQ_CNT_REG,
++			   SUN55I_A523_DPHY_FREQ_CNT_EN,
++			   SUN55I_A523_DPHY_FREQ_CNT_EN);
++
++	/*
++	 * PHY C is a non-zero vendor PHY instance, for which the vendor
++	 * initialization programs the clock-lane deskew value to 0x7.
++	 */
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_DESKEW1_REG,
++			   SUN55I_A523_DPHY_DESKEW1_LANECK_SET,
++			   FIELD_PREP(SUN55I_A523_DPHY_DESKEW1_LANECK_SET,
++				      0x7));
++
++	return 0;
++}
++
++static int sun55i_a523_mipi_dphy_power_off(struct phy *phy)
++{
++	struct sun55i_a523_mipi_dphy *dphy = phy_get_drvdata(phy);
++
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_CTL_REG,
++			   SUN55I_A523_DPHY_CTL_EN, 0);
++	regmap_update_bits(dphy->regs, SUN55I_A523_DPHY_FREQ_CNT_REG,
++			   SUN55I_A523_DPHY_FREQ_CNT_EN, 0);
++
++	return 0;
++}
++
++static const struct phy_ops sun55i_a523_mipi_dphy_ops = {
++	.configure	= sun55i_a523_mipi_dphy_configure,
++	.power_on	= sun55i_a523_mipi_dphy_power_on,
++	.power_off	= sun55i_a523_mipi_dphy_power_off,
++};
++
++static const struct regmap_config sun55i_a523_mipi_dphy_regmap_config = {
++	.reg_bits	= 32,
++	.val_bits	= 32,
++	.reg_stride	= 4,
++	.max_register	= SUN55I_A523_DPHY_MAX_REG,
++	.name		= "mipi-dphy",
++};
++
++static int sun55i_a523_mipi_dphy_probe(struct platform_device *pdev)
++{
++	struct sun55i_a523_mipi_dphy *dphy;
++	struct phy_provider *provider;
++	void __iomem *base;
++
++	dphy = devm_kzalloc(&pdev->dev, sizeof(*dphy), GFP_KERNEL);
++	if (!dphy)
++		return -ENOMEM;
++
++	base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(base))
++		return PTR_ERR(base);
++
++	dphy->regs = devm_regmap_init_mmio(&pdev->dev, base,
++					   &sun55i_a523_mipi_dphy_regmap_config);
++	if (IS_ERR(dphy->regs))
++		return PTR_ERR(dphy->regs);
++
++	dphy->phy = devm_phy_create(&pdev->dev, NULL,
++				    &sun55i_a523_mipi_dphy_ops);
++	if (IS_ERR(dphy->phy))
++		return PTR_ERR(dphy->phy);
++
++	phy_set_drvdata(dphy->phy, dphy);
++
++	provider = devm_of_phy_provider_register(&pdev->dev,
++						 of_phy_simple_xlate);
++
++	return PTR_ERR_OR_ZERO(provider);
++}
++
++static const struct of_device_id sun55i_a523_mipi_dphy_of_match[] = {
++	{ .compatible = "allwinner,sun55i-a523-mipi-dphy" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, sun55i_a523_mipi_dphy_of_match);
++
++static struct platform_driver sun55i_a523_mipi_dphy_driver = {
++	.probe = sun55i_a523_mipi_dphy_probe,
++	.driver = {
++		.name = "sun55i-a523-mipi-dphy",
++		.of_match_table = sun55i_a523_mipi_dphy_of_match,
++	},
++};
++module_platform_driver(sun55i_a523_mipi_dphy_driver);
++
++MODULE_AUTHOR("Nick Sl <335926735+nickslkr@users.noreply.github.com>");
++MODULE_DESCRIPTION("Allwinner A523 MIPI CSI-2 receiver D-PHY driver");
++MODULE_LICENSE("GPL");
+-- 
+2.47.3
+

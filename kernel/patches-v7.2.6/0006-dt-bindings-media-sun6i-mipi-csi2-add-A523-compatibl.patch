@@ -1,0 +1,66 @@
+From 5d18f8bb2b8474cf78aa7ba8fe77f9bb905a7d9b Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 20:05:31 +0300
+Subject: [PATCH 06/22] dt-bindings: media: sun6i-mipi-csi2: add A523
+ compatible
+
+Document the Allwinner A523 MIPI CSI-2 receiver port.
+
+Unlike the A31 controller, the A523 receiver port does not expose dedicated interrupt, clock or reset resources in its device tree node. Make those resources conditional while keeping them required for the existing A31 and V3s compatibles.
+
+The A523 port continues to reference an external Generic PHY through the existing dphy phandle.
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+---
+ .../media/allwinner,sun6i-a31-mipi-csi2.yaml  | 24 +++++++++++++++----
+ 1 file changed, 20 insertions(+), 4 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/media/allwinner,sun6i-a31-mipi-csi2.yaml b/Documentation/devicetree/bindings/media/allwinner,sun6i-a31-mipi-csi2.yaml
+index 627b28e94..d05a59738 100644
+--- a/Documentation/devicetree/bindings/media/allwinner,sun6i-a31-mipi-csi2.yaml
++++ b/Documentation/devicetree/bindings/media/allwinner,sun6i-a31-mipi-csi2.yaml
+@@ -13,6 +13,7 @@ properties:
+   compatible:
+     oneOf:
+       - const: allwinner,sun6i-a31-mipi-csi2
++      - const: allwinner,sun55i-a523-mipi-csi2
+       - items:
+           - const: allwinner,sun8i-v3s-mipi-csi2
+           - const: allwinner,sun6i-a31-mipi-csi2
+@@ -81,14 +82,29 @@ properties:
+ required:
+   - compatible
+   - reg
+-  - interrupts
+-  - clocks
+-  - clock-names
+   - phys
+   - phy-names
+-  - resets
+   - ports
+ 
++allOf:
++  - if:
++      properties:
++        compatible:
++          contains:
++            const: allwinner,sun55i-a523-mipi-csi2
++    then:
++      properties:
++        interrupts: false
++        clocks: false
++        clock-names: false
++        resets: false
++    else:
++      required:
++        - interrupts
++        - clocks
++        - clock-names
++        - resets
++
+ additionalProperties: false
+ 
+ examples:
+-- 
+2.47.3
+

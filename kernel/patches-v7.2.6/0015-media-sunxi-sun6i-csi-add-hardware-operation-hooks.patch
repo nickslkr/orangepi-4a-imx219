@@ -1,0 +1,260 @@
+From fddc47adc01385a9d77b406c4e18c7f607dfef0d Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 13:33:38 +0300
+Subject: [PATCH 15/22] media: sunxi: sun6i-csi: add hardware operation hooks
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+
+---
+ .../platform/sunxi/sun6i-csi/sun6i_csi.c      | 15 +++++++++++
+ .../platform/sunxi/sun6i-csi/sun6i_csi.h      | 22 +++++++++++++--
+ .../sunxi/sun6i-csi/sun6i_csi_bridge.c        | 27 ++++++++++---------
+ .../sunxi/sun6i-csi/sun6i_csi_bridge.h        | 10 +++++++
+ .../sunxi/sun6i-csi/sun6i_csi_capture.c       |  7 +++--
+ .../sunxi/sun6i-csi/sun6i_csi_capture.h       |  2 ++
+ 6 files changed, 64 insertions(+), 19 deletions(-)
+
+diff --git a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.c b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.c
+index af2a32c22..791c468ef 100644
+--- a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.c
++++ b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.c
+@@ -240,6 +240,8 @@ static int sun6i_csi_resources_setup(struct sun6i_csi_device *csi_dev,
+ 	if (!variant)
+ 		return -EINVAL;
+ 
++	csi_dev->variant = variant;
++
+ 	/* Registers */
+ 
+ 	io_base = devm_platform_ioremap_resource(platform_dev, 0);
+@@ -387,12 +389,25 @@ static void sun6i_csi_remove(struct platform_device *pdev)
+ 	sun6i_csi_resources_cleanup(csi_dev);
+ }
+ 
++static const struct sun6i_csi_hw_ops sun6i_csi_legacy_hw_ops = {
++	.irq_enable		= sun6i_csi_bridge_irq_enable,
++	.irq_disable		= sun6i_csi_bridge_irq_disable,
++	.irq_clear		= sun6i_csi_bridge_irq_clear,
++	.bridge_enable		= sun6i_csi_bridge_enable,
++	.bridge_disable		= sun6i_csi_bridge_disable,
++	.bridge_configure	= sun6i_csi_bridge_configure,
++	.capture_configure	= sun6i_csi_capture_configure,
++	.buffer_configure	= sun6i_csi_capture_buffer_configure,
++};
++
+ static const struct sun6i_csi_variant sun6i_a31_csi_variant = {
+ 	.clock_mod_rate	= 297000000,
++	.hw_ops			= &sun6i_csi_legacy_hw_ops,
+ };
+ 
+ static const struct sun6i_csi_variant sun50i_a64_csi_variant = {
+ 	.clock_mod_rate	= 300000000,
++	.hw_ops			= &sun6i_csi_legacy_hw_ops,
+ };
+ 
+ static const struct of_device_id sun6i_csi_of_match[] = {
+diff --git a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.h b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.h
+index bc3f0dae3..cb23037a5 100644
+--- a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.h
++++ b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.h
+@@ -48,11 +48,29 @@ struct sun6i_csi_device {
+ 	struct clk			*clock_ram;
+ 	struct reset_control		*reset;
+ 
+-	bool				isp_available;
++	bool                            isp_available;
++
++	const struct sun6i_csi_variant  *variant;
++};
++
++struct sun6i_csi_hw_ops {
++	void (*irq_enable)(struct sun6i_csi_device *csi_dev);
++	void (*irq_disable)(struct sun6i_csi_device *csi_dev);
++	void (*irq_clear)(struct sun6i_csi_device *csi_dev);
++
++	void (*bridge_enable)(struct sun6i_csi_device *csi_dev);
++	void (*bridge_disable)(struct sun6i_csi_device *csi_dev);
++	void (*bridge_configure)(struct sun6i_csi_device *csi_dev,
++				 struct sun6i_csi_bridge_source *source);
++
++	void (*capture_configure)(struct sun6i_csi_device *csi_dev);
++	void (*buffer_configure)(struct sun6i_csi_device *csi_dev,
++				 struct sun6i_csi_buffer *csi_buffer);
+ };
+ 
+ struct sun6i_csi_variant {
+-	unsigned long	clock_mod_rate;
++	unsigned long                   clock_mod_rate;
++	const struct sun6i_csi_hw_ops   *hw_ops;
+ };
+ 
+ /* ISP */
+diff --git a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.c b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.c
+index d006d9dd0..1c75bf3e9 100644
+--- a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.c
++++ b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.c
+@@ -176,7 +176,7 @@ sun6i_csi_bridge_format_find(u32 mbus_code)
+ 
+ /* Bridge */
+ 
+-static void sun6i_csi_bridge_irq_enable(struct sun6i_csi_device *csi_dev)
++void sun6i_csi_bridge_irq_enable(struct sun6i_csi_device *csi_dev)
+ {
+ 	struct regmap *regmap = csi_dev->regmap;
+ 
+@@ -190,14 +190,14 @@ static void sun6i_csi_bridge_irq_enable(struct sun6i_csi_device *csi_dev)
+ 		     SUN6I_CSI_CH_INT_EN_CD);
+ }
+ 
+-static void sun6i_csi_bridge_irq_disable(struct sun6i_csi_device *csi_dev)
++void sun6i_csi_bridge_irq_disable(struct sun6i_csi_device *csi_dev)
+ {
+ 	struct regmap *regmap = csi_dev->regmap;
+ 
+ 	regmap_write(regmap, SUN6I_CSI_CH_INT_EN_REG, 0);
+ }
+ 
+-static void sun6i_csi_bridge_irq_clear(struct sun6i_csi_device *csi_dev)
++void sun6i_csi_bridge_irq_clear(struct sun6i_csi_device *csi_dev)
+ {
+ 	struct regmap *regmap = csi_dev->regmap;
+ 
+@@ -206,7 +206,7 @@ static void sun6i_csi_bridge_irq_clear(struct sun6i_csi_device *csi_dev)
+ 		     SUN6I_CSI_CH_INT_STA_CLEAR);
+ }
+ 
+-static void sun6i_csi_bridge_enable(struct sun6i_csi_device *csi_dev)
++void sun6i_csi_bridge_enable(struct sun6i_csi_device *csi_dev)
+ {
+ 	struct regmap *regmap = csi_dev->regmap;
+ 
+@@ -217,7 +217,7 @@ static void sun6i_csi_bridge_enable(struct sun6i_csi_device *csi_dev)
+ 			   SUN6I_CSI_CAP_VCAP_ON);
+ }
+ 
+-static void sun6i_csi_bridge_disable(struct sun6i_csi_device *csi_dev)
++void sun6i_csi_bridge_disable(struct sun6i_csi_device *csi_dev)
+ {
+ 	struct regmap *regmap = csi_dev->regmap;
+ 
+@@ -390,7 +390,7 @@ static void sun6i_csi_bridge_configure_format(struct sun6i_csi_device *csi_dev)
+ 	regmap_write(regmap, SUN6I_CSI_CH_CFG_REG, value);
+ }
+ 
+-static void sun6i_csi_bridge_configure(struct sun6i_csi_device *csi_dev,
++void sun6i_csi_bridge_configure(struct sun6i_csi_device *csi_dev,
+ 				       struct sun6i_csi_bridge_source *source)
+ {
+ 	struct sun6i_csi_bridge *bridge = &csi_dev->bridge;
+@@ -408,6 +408,7 @@ static void sun6i_csi_bridge_configure(struct sun6i_csi_device *csi_dev,
+ static int sun6i_csi_bridge_s_stream(struct v4l2_subdev *subdev, int on)
+ {
+ 	struct sun6i_csi_device *csi_dev = v4l2_get_subdevdata(subdev);
++	const struct sun6i_csi_hw_ops *ops = csi_dev->variant->hw_ops;
+ 	struct sun6i_csi_bridge *bridge = &csi_dev->bridge;
+ 	struct media_pad *local_pad = &bridge->pads[SUN6I_CSI_BRIDGE_PAD_SINK];
+ 	bool capture_streaming = csi_dev->capture.state.streaming;
+@@ -447,14 +448,14 @@ static int sun6i_csi_bridge_s_stream(struct v4l2_subdev *subdev, int on)
+ 
+ 	/* Clear */
+ 
+-	sun6i_csi_bridge_irq_clear(csi_dev);
++	ops->irq_clear(csi_dev);
+ 
+ 	/* Configure */
+ 
+-	sun6i_csi_bridge_configure(csi_dev, source);
++	ops->bridge_configure(csi_dev, source);
+ 
+ 	if (capture_streaming)
+-		sun6i_csi_capture_configure(csi_dev);
++		ops->capture_configure(csi_dev);
+ 
+ 	/* State Update */
+ 
+@@ -464,9 +465,9 @@ static int sun6i_csi_bridge_s_stream(struct v4l2_subdev *subdev, int on)
+ 	/* Enable */
+ 
+ 	if (capture_streaming)
+-		sun6i_csi_bridge_irq_enable(csi_dev);
++		ops->irq_enable(csi_dev);
+ 
+-	sun6i_csi_bridge_enable(csi_dev);
++	ops->bridge_enable(csi_dev);
+ 
+ 	ret = v4l2_subdev_call(source_subdev, video, s_stream, 1);
+ 	if (ret && ret != -ENOIOCTLCMD)
+@@ -476,9 +477,9 @@ static int sun6i_csi_bridge_s_stream(struct v4l2_subdev *subdev, int on)
+ 
+ disable:
+ 	if (capture_streaming)
+-		sun6i_csi_bridge_irq_disable(csi_dev);
++		ops->irq_disable(csi_dev);
+ 
+-	sun6i_csi_bridge_disable(csi_dev);
++	ops->bridge_disable(csi_dev);
+ 
+ 	pm_runtime_put(dev);
+ 
+diff --git a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.h b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.h
+index 44653b38f..3dbe4eae0 100644
+--- a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.h
++++ b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.h
+@@ -61,6 +61,16 @@ void sun6i_csi_bridge_format(struct sun6i_csi_device *csi_dev,
+ const struct sun6i_csi_bridge_format *
+ sun6i_csi_bridge_format_find(u32 mbus_code);
+ 
++/* Hardware */
++
++void sun6i_csi_bridge_irq_enable(struct sun6i_csi_device *csi_dev);
++void sun6i_csi_bridge_irq_disable(struct sun6i_csi_device *csi_dev);
++void sun6i_csi_bridge_irq_clear(struct sun6i_csi_device *csi_dev);
++void sun6i_csi_bridge_enable(struct sun6i_csi_device *csi_dev);
++void sun6i_csi_bridge_disable(struct sun6i_csi_device *csi_dev);
++void sun6i_csi_bridge_configure(struct sun6i_csi_device *csi_dev,
++				struct sun6i_csi_bridge_source *source);
++
+ /* Bridge */
+ 
+ int sun6i_csi_bridge_setup(struct sun6i_csi_device *csi_dev);
+diff --git a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_capture.c b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_capture.c
+index 65879f480..8443c3a02 100644
+--- a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_capture.c
++++ b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_capture.c
+@@ -329,9 +329,8 @@ static bool sun6i_csi_capture_format_match(u32 pixelformat, u32 mbus_code)
+ 
+ /* Capture */
+ 
+-static void
+-sun6i_csi_capture_buffer_configure(struct sun6i_csi_device *csi_dev,
+-				   struct sun6i_csi_buffer *csi_buffer)
++void sun6i_csi_capture_buffer_configure(struct sun6i_csi_device *csi_dev,
++					 struct sun6i_csi_buffer *csi_buffer)
+ {
+ 	struct regmap *regmap = csi_dev->regmap;
+ 	const struct v4l2_format_info *info;
+@@ -489,7 +488,7 @@ void sun6i_csi_capture_state_update(struct sun6i_csi_device *csi_dev)
+ 	csi_buffer = list_first_entry(&state->queue, struct sun6i_csi_buffer,
+ 				      list);
+ 
+-	sun6i_csi_capture_buffer_configure(csi_dev, csi_buffer);
++	csi_dev->variant->hw_ops->buffer_configure(csi_dev, csi_buffer);
+ 
+ 	list_del(&csi_buffer->list);
+ 
+diff --git a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_capture.h b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_capture.h
+index 3ee5ccefb..2709020a2 100644
+--- a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_capture.h
++++ b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_capture.h
+@@ -73,6 +73,8 @@ struct sun6i_csi_capture_format *sun6i_csi_capture_format_find(u32 pixelformat);
+ 
+ /* Capture */
+ 
++void sun6i_csi_capture_buffer_configure(struct sun6i_csi_device *csi_dev,
++					  struct sun6i_csi_buffer *csi_buffer);
+ void sun6i_csi_capture_configure(struct sun6i_csi_device *csi_dev);
+ void sun6i_csi_capture_state_update(struct sun6i_csi_device *csi_dev);
+ 
+-- 
+2.47.3
+

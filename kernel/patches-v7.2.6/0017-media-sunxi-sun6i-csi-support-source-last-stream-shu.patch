@@ -1,0 +1,53 @@
+From da8ceea4fc988277f88a47f44abd0335c536a932 Mon Sep 17 00:00:00 2001
+From: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 14:08:41 +0300
+Subject: [PATCH 17/22] media: sunxi: sun6i-csi: support source-last stream
+ shutdown
+
+Signed-off-by: Nick Sl <335926735+nickslkr@users.noreply.github.com>
+
+---
+ drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.h        | 1 +
+ drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.c | 7 ++++++-
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.h b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.h
+index 1b0e83ccf..708877826 100644
+--- a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.h
++++ b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi.h
+@@ -80,6 +80,7 @@ struct sun6i_csi_hw_ops {
+ struct sun6i_csi_variant {
+ 	unsigned long                   clock_mod_rate;
+ 	const struct sun6i_csi_hw_ops   *hw_ops;
++	bool                            source_stream_last;
+ };
+ 
+ /* ISP */
+diff --git a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.c b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.c
+index 1c75bf3e9..6de89cafc 100644
+--- a/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.c
++++ b/drivers/media/platform/sunxi/sun6i-csi/sun6i_csi_bridge.c
+@@ -435,7 +435,9 @@ static int sun6i_csi_bridge_s_stream(struct v4l2_subdev *subdev, int on)
+ 		source = &bridge->source_mipi_csi2;
+ 
+ 	if (!on) {
+-		v4l2_subdev_call(source_subdev, video, s_stream, 0);
++		if (!csi_dev->variant->source_stream_last)
++			v4l2_subdev_call(source_subdev, video, s_stream, 0);
++
+ 		ret = 0;
+ 		goto disable;
+ 	}
+@@ -481,6 +483,9 @@ static int sun6i_csi_bridge_s_stream(struct v4l2_subdev *subdev, int on)
+ 
+ 	ops->bridge_disable(csi_dev);
+ 
++	if (!on && csi_dev->variant->source_stream_last)
++		v4l2_subdev_call(source_subdev, video, s_stream, 0);
++
+ 	pm_runtime_put(dev);
+ 
+ 	return ret;
+-- 
+2.47.3
+
