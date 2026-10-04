@@ -358,3 +358,21 @@ terms of the corresponding upstream FFmpeg code.
 
 SPDX identifiers and upstream copyright/license notices present in individual
 files take precedence for those files.
+
+2026 10 04
+A local source-tree change implementing this initialization has been prepared and passes git diff --check, but it has not been built or installed yet.
+Linux 7.2.9 check
+Vanilla Linux v7.2.9 was also checked.
+It still uses the older internally managed bridge format implementation and does not contain the partial active-state conversion described above. In particular, it still uses the custom sun6i_csi_bridge_get_fmt() and does not call v4l2_subdev_init_finalize() in this path.
+However, the current Armbian sunxi-7.2 patch set still contains the active-state patch with the sink-only init_state() implementation.
+Therefore simply rebasing the existing Armbian sunxi-7.2 patch set from Linux 7.2.6 to Linux 7.2.9 would not, by itself, resolve this issue.
+Current plan
+No additional kernel changes are planned for the current 7.2.6-based installation at this point.
+The camera eventually starts after the producer is restarted, so the delayed startup is currently acceptable for this system.
+We plan to wait for the Armbian sunxi64 kernel to move to Linux 7.3 and then re-check the resulting sun6i-csi implementation before making further changes.
+When the 7.3-based tree is available, the main checks will be:
+whether sun6i_csi_bridge_init_state() initializes both sink and source pads;
+whether Armbian still carries the current cams-7.2 active-state backport or an updated/final upstream version;
+whether the complete active-state conversion, including the corresponding cleanup paths such as v4l2_subdev_cleanup(), is present;
+whether the early-boot unsupported bridge format 0x0000 / STREAMON failure still reproduces.
+For now, this is being left as a documented kernel/backport issue rather than adding another local kernel build solely to eliminate the boot-time delay.
