@@ -360,6 +360,7 @@ SPDX identifiers and upstream copyright/license notices present in individual
 files take precedence for those files.
 
 2026 10 04
+
 A local source-tree change implementing this initialization has been prepared and passes git diff --check, but it has not been built or installed yet.
 Linux 7.2.9 check
 Vanilla Linux v7.2.9 was also checked.
