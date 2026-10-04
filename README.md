@@ -361,19 +361,118 @@ files take precedence for those files.
 
 2026 10 04
 
-A local source-tree change implementing this initialization has been prepared and passes git diff --check, but it has not been built or installed yet.
-Linux 7.2.9 check
-Vanilla Linux v7.2.9 was also checked.
-It still uses the older internally managed bridge format implementation and does not contain the partial active-state conversion described above. In particular, it still uses the custom sun6i_csi_bridge_get_fmt() and does not call v4l2_subdev_init_finalize() in this path.
-However, the current Armbian sunxi-7.2 patch set still contains the active-state patch with the sink-only init_state() implementation.
-Therefore simply rebasing the existing Armbian sunxi-7.2 patch set from Linux 7.2.6 to Linux 7.2.9 would not, by itself, resolve this issue.
-Current plan
+### Update: root cause identified, waiting for the 7.3-based Armbian kernel before further changes
+
+Further investigation narrowed the boot-time camera failure down to the `sun6i-csi` bridge active-state initialization.
+
+The observed failure during early boot is:
+
+```text
+sun6i-csi 5800800.csi: unsupported bridge format 0x0000
+```
+
+and the userspace producer subsequently fails on the physical camera device with:
+
+```text
+VIDIOC_STREAMON: Invalid argument
+```
+
+This was initially suspected to be related to service ordering or the v4l2loopback/uStreamer startup sequence, but source inspection confirmed that the failing `VIDIOC_STREAMON` is the `V4L2_BUF_TYPE_VIDEO_CAPTURE` STREAMON on `/dev/video0`, not the v4l2loopback output device.
+
+The relevant path is:
+
+```text
+sun6i_csi_capture_link_validate()
+    -> get active format from SUN6I_CSI_BRIDGE_PAD_SOURCE
+    -> fmt.format.code == 0x0000
+    -> sun6i_csi_bridge_format_find(0)
+    -> NULL
+    -> -EINVAL
+```
+
+The current Armbian `sunxi-7.2` camera patch:
+
+```text
+patch/kernel/archive/sunxi-7.2/patches.megous/cams-7.2/
+0002-media-sun6i-csi-subdev-Use-subdev-active-state-to-st.patch
+```
+
+converts the bridge to the V4L2 subdev active-state API and includes, among other changes:
+
+```c
+.get_fmt = v4l2_subdev_get_fmt;
+```
+
+and:
+
+```c
+ret = v4l2_subdev_init_finalize(subdev);
+```
+
+It also propagates the sink format to the source pad from `set_fmt()`:
+
+```c
+src_format = v4l2_subdev_state_get_format(state,
+                                          SUN6I_CSI_BRIDGE_PAD_SOURCE);
+*src_format = *sink_format;
+```
+
+However, `sun6i_csi_bridge_init_state()` still initializes only the sink pad:
+
+```c
+unsigned int pad = SUN6I_CSI_BRIDGE_PAD_SINK;
+struct v4l2_mbus_framefmt *mbus_format =
+        v4l2_subdev_state_get_format(state, pad);
+```
+
+Therefore the source pad can remain zero-initialized until a successful `set_fmt()` propagates the sink format to it.
+
+This matches the actual failure exactly: during early STREAMON validation the capture side reads `SUN6I_CSI_BRIDGE_PAD_SOURCE`, obtains media-bus code `0x0000`, and rejects the pipeline.
+
+The later upstream version of the active-state conversion initializes all subdev pads identically, which is appropriate because the CSI bridge does not perform format conversion:
+
+```c
+unsigned int pad;
+
+for (pad = 0; pad < subdev->entity.num_pads; pad++) {
+        struct v4l2_mbus_framefmt *mbus_format;
+
+        mbus_format = v4l2_subdev_state_get_format(state, pad);
+
+        mbus_format->code = sun6i_csi_bridge_formats[0].mbus_code;
+        mbus_format->width = 1280;
+        mbus_format->height = 720;
+
+        sun6i_csi_bridge_mbus_format_prepare(mbus_format);
+}
+```
+
+A local source-tree change implementing this initialization has been prepared and passes `git diff --check`, but it has **not been built or installed yet**.
+
+### Linux 7.2.9 check
+
+Vanilla Linux `v7.2.9` was also checked.
+
+It still uses the older internally managed bridge format implementation and does **not** contain the partial active-state conversion described above. In particular, it still uses the custom `sun6i_csi_bridge_get_fmt()` and does not call `v4l2_subdev_init_finalize()` in this path.
+
+However, the current Armbian `sunxi-7.2` patch set still contains the active-state patch with the sink-only `init_state()` implementation.
+
+Therefore simply rebasing the existing Armbian `sunxi-7.2` patch set from Linux 7.2.6 to Linux 7.2.9 would not, by itself, resolve this issue.
+
+### Current plan
+
 No additional kernel changes are planned for the current 7.2.6-based installation at this point.
+
 The camera eventually starts after the producer is restarted, so the delayed startup is currently acceptable for this system.
-We plan to wait for the Armbian sunxi64 kernel to move to Linux 7.3 and then re-check the resulting sun6i-csi implementation before making further changes.
+
+We plan to wait for the Armbian `sunxi64` kernel to move to Linux 7.3 and then re-check the resulting `sun6i-csi` implementation before making further changes.
+
 When the 7.3-based tree is available, the main checks will be:
-whether sun6i_csi_bridge_init_state() initializes both sink and source pads;
-whether Armbian still carries the current cams-7.2 active-state backport or an updated/final upstream version;
-whether the complete active-state conversion, including the corresponding cleanup paths such as v4l2_subdev_cleanup(), is present;
-whether the early-boot unsupported bridge format 0x0000 / STREAMON failure still reproduces.
+
+1. whether `sun6i_csi_bridge_init_state()` initializes both sink and source pads;
+2. whether Armbian still carries the current `cams-7.2` active-state backport or an updated/final upstream version;
+3. whether the complete active-state conversion, including the corresponding cleanup paths such as `v4l2_subdev_cleanup()`, is present;
+4. whether the early-boot `unsupported bridge format 0x0000` / STREAMON failure still reproduces.
+
+For now, this is being left as a documented kernel/backport issue rather than adding another local kernel build solely to eliminate the boot-time delay.
 For now, this is being left as a documented kernel/backport issue rather than adding another local kernel build solely to eliminate the boot-time delay.
